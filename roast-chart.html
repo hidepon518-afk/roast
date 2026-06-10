@@ -234,11 +234,19 @@ function draw(){
   let dropT = parsed.endT;
   const tEnd = pts[pts.length-1].t;
 
-  const ror = [];
+  // RoR: 区間の中点時刻にプロット（Artisan流）
+  const rorRaw = [];
   for(let i=1;i<pts.length;i++){
     const dt = pts[i].t - pts[i-1].t;
-    if(dt>0) ror.push({t:pts[i].t, v:(pts[i].temp-pts[i-1].temp)/dt});
+    if(dt>0) rorRaw.push({t:(pts[i].t+pts[i-1].t)/2, v:(pts[i].temp-pts[i-1].temp)/dt});
   }
+  // 3点加重移動平均（0.25/0.5/0.25）で平滑化。点が少なければ生のまま
+  const ror = rorRaw.length >= 4
+    ? rorRaw.map((r,i)=>{
+        const p = rorRaw[i-1]||r, n = rorRaw[i+1]||r;
+        return {t:r.t, v: p.v*0.25 + r.v*0.5 + n.v*0.25};
+      })
+    : rorRaw;
 
   const S = 2;
   const W = 800, H = 640;
@@ -262,21 +270,22 @@ function draw(){
   const plotW = W-padL-padR, plotH = H-padT-padB;
 
   // --- 温度軸（左）: 25℃刻み ---
-  const tMax = Math.max(Math.ceil(tEnd), dropT?Math.ceil(dropT):0, 1);
+  // X軸は0〜20分固定（万一データが超えたら拡張）
+  const tMax = Math.max(20, Math.ceil(tEnd), dropT?Math.ceil(dropT):0);
   const temps = pts.map(p=>p.temp);
   const yMin = Math.floor((Math.min(...temps)-5)/25)*25;
   const yMax = Math.ceil((Math.max(...temps)+5)/25)*25;
   const N = (yMax-yMin)/25; // グリッド行数
 
   // --- RoR軸（右）: 温度軸とは独立した刻み。
-  // RoRカーブがプロット下半分（約55%以下）に収まる最小ステップを選ぶ
+  // RoRカーブがプロット高さの約70%以内に収まる最小ステップを選ぶ
   const rorVals = ror.map(r=>r.v);
   const rorMax = Math.max(...rorVals, 1);
   const rorMin = Math.min(...rorVals, 0);
-  let rStep = 5;
-  for(const s of [5,10,15,20,25,30]){
+  let rStep = 2;
+  for(const s of [2,3,5,10,15,20,25,30]){
     const rmin = Math.floor(Math.min(0,rorMin)/s)*s;
-    if(rorMax - rmin <= 0.55*s*N){ rStep = s; break; }
+    if(rorMax - rmin <= 0.7*s*N){ rStep = s; break; }
     rStep = s;
   }
   const rMin = Math.floor(Math.min(0,rorMin)/rStep)*rStep;
@@ -335,6 +344,11 @@ function draw(){
   // x labels
   ctx.textAlign='center'; ctx.fillStyle=C.muted; ctx.font='500 11px '+mono;
   const xStep = tMax>16 ? 2 : 1;
+  // 1分ごとの小目盛り
+  for(let t=0;t<=tMax;t++){
+    ctx.strokeStyle=C.grid;
+    ctx.beginPath(); ctx.moveTo(X(t), padT+plotH); ctx.lineTo(X(t), padT+plotH+3); ctx.stroke();
+  }
   for(let t=0;t<=tMax;t+=xStep){
     ctx.fillText(t+'分', X(t), padT+plotH+22);
     ctx.strokeStyle=C.grid;
