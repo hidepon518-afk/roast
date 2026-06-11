@@ -347,13 +347,21 @@ function draw(){
     const dt = pts[i].t - pts[i-1].t;
     if(dt>0) rorRaw.push({t:(pts[i].t+pts[i-1].t)/2, v:(pts[i].temp-pts[i-1].temp)/dt});
   }
-  // 3点加重移動平均（0.25/0.5/0.25）で平滑化。点が少なければ生のまま
-  const ror = rorRaw.length >= 4
-    ? rorRaw.map((r,i)=>{
-        const p = rorRaw[i-1]||r, n = rorRaw[i+1]||r;
-        return {t:r.t, v: p.v*0.25 + r.v*0.5 + n.v*0.25};
-      })
-    : rorRaw;
+  // 加重移動平均（0.25/0.5/0.25）。点が多い（1分おき等）ほど効く。
+  function smoothOnce(arr){
+    return arr.map((r,i)=>{
+      const p = arr[i-1]||r, n = arr[i+1]||r;
+      return {t:r.t, v: p.v*0.25 + r.v*0.5 + n.v*0.25};
+    });
+  }
+  let ror;
+  if(rorRaw.length >= 6){
+    ror = smoothOnce(smoothOnce(rorRaw)); // 点が多ければ2回かけて滑らかに
+  } else if(rorRaw.length >= 4){
+    ror = smoothOnce(rorRaw);
+  } else {
+    ror = rorRaw; // 点が少なすぎる時は生のまま
+  }
 
   const S = 2;
   const W = 800, H = 640;
@@ -376,27 +384,26 @@ function draw(){
   const padL=64, padR=64, padT=96, padB=104;
   const plotW = W-padL-padR, plotH = H-padT-padB;
 
-  // --- 温度軸（左）: 25℃刻み ---
+  // --- 温度軸（左）: 0〜250℃ 固定・25℃刻み（はみ出す時だけ拡張）---
   // X軸は0〜20分固定（万一データが超えたら拡張）
   const tMax = Math.max(20, Math.ceil(tEnd), dropT?Math.ceil(dropT):0);
   const temps = pts.map(p=>p.temp);
-  const yMin = Math.floor((Math.min(...temps)-5)/25)*25;
-  const yMax = Math.ceil((Math.max(...temps)+5)/25)*25;
+  let yMin = 0;
+  let yMax = 250;
+  // 固定範囲を超えるデータがあれば25刻みで広げる
+  yMin = Math.min(yMin, Math.floor((Math.min(...temps)-5)/25)*25);
+  yMax = Math.max(yMax, Math.ceil((Math.max(...temps)+5)/25)*25);
   const N = (yMax-yMin)/25; // グリッド行数
 
-  // --- RoR軸（右）: 温度軸とは独立した刻み。
-  // RoRカーブがプロット高さの約70%以内に収まる最小ステップを選ぶ
+  // --- RoR軸（右）: -50〜150℃/分 固定。温度軸の行数Nに合わせて刻みを算出。
+  // はみ出すRoRがあれば範囲を広げる
   const rorVals = ror.map(r=>r.v);
   const rorMax = Math.max(...rorVals, 1);
   const rorMin = Math.min(...rorVals, 0);
-  let rStep = 2;
-  for(const s of [2,3,5,10,15,20,25,30]){
-    const rmin = Math.floor(Math.min(0,rorMin)/s)*s;
-    if(rorMax - rmin <= 0.7*s*N){ rStep = s; break; }
-    rStep = s;
-  }
-  const rMin = Math.floor(Math.min(0,rorMin)/rStep)*rStep;
-  const rMax = rMin + rStep*N;
+  let rMin = -50, rMax = 150;
+  rMin = Math.min(rMin, Math.floor(rorMin/25)*25);
+  rMax = Math.max(rMax, Math.ceil(rorMax/25)*25);
+  const rStep = (rMax - rMin) / N; // 温度グリッドと同じ本数で割る
 
   const X = t => padL + (t/tMax)*plotW;
   const Y = v => padT + (1-(v-yMin)/(yMax-yMin))*plotH;
@@ -414,9 +421,18 @@ function draw(){
   ctx.fillText(title, padL, 64);
 
   ctx.font='600 12px '+sans;
-  ctx.textAlign='right';
-  ctx.fillStyle=C.amber; ctx.fillText('● 温度', W-padR-64, 62);
-  ctx.fillStyle=C.slate; ctx.fillText('● RoR', W-padR, 62);
+  ctx.textAlign='left';
+  // 温度（実線サンプル＋ラベル）
+  const legTempX = W-padR-150;
+  ctx.strokeStyle=C.amber; ctx.lineWidth=3; ctx.setLineDash([]);
+  ctx.beginPath(); ctx.moveTo(legTempX, 58); ctx.lineTo(legTempX+24, 58); ctx.stroke();
+  ctx.fillStyle=C.amber; ctx.fillText('温度', legTempX+30, 62);
+  // RoR（破線サンプル＋ラベル）
+  const legRorX = W-padR-78;
+  ctx.strokeStyle=C.slate; ctx.lineWidth=2; ctx.setLineDash([6,5]);
+  ctx.beginPath(); ctx.moveTo(legRorX, 58); ctx.lineTo(legRorX+24, 58); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle=C.slate; ctx.fillText('RoR', legRorX+30, 62);
 
   // 発達フェーズの帯
   if(crackT!=null){
@@ -439,7 +455,7 @@ function draw(){
     ctx.fillStyle=C.muted; ctx.textAlign='right';
     ctx.fillText(tv+'', padL-10, y+4);
     ctx.fillStyle='#9FB2BD'; ctx.textAlign='left';
-    ctx.fillText(rv+'', W-padR+10, y+4);
+    ctx.fillText(Math.round(rv)+'', W-padR+10, y+4);
   }
   // RoR=0 の基準線（マイナス域がある時だけ強調）
   if(rMin<0){
@@ -504,9 +520,9 @@ function draw(){
     }
     // 凡例に「理想」を追加
     ctx.font='600 11px '+sans;
-    ctx.textAlign='right';
-    ctx.fillStyle='rgba(184,92,37,0.35)';
-    ctx.fillText('--- 理想', W-padR-130, 62);
+    ctx.textAlign='left';
+    ctx.fillStyle='rgba(184,92,37,0.45)';
+    ctx.fillText('--- 理想', W-padR-218, 62);
   }
 
   // RoR（破線・先に描く）
