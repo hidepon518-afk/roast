@@ -69,6 +69,32 @@
   .save-hint{
     margin-top:8px;text-align:center;font-size:13px;color:var(--muted);line-height:1.6;
   }
+  .ideal-section{
+    margin:16px 0;border:1px solid var(--line);border-radius:10px;
+    background:var(--card);overflow:hidden;
+  }
+  .ideal-section summary{
+    padding:12px 14px;font-size:13px;font-weight:600;color:var(--muted);
+    cursor:pointer;list-style:none;
+  }
+  .ideal-section summary::-webkit-details-marker{display:none;}
+  .ideal-section summary::before{content:'▶ ';font-size:10px;}
+  .ideal-section[open] summary::before{content:'▼ ';}
+  .ideal-body{padding:0 14px 14px;}
+  .ideal-body textarea{
+    width:100%;border:1px solid var(--line);border-radius:8px;
+    background:var(--paper);color:var(--ink);
+    font-family:ui-monospace,"SF Mono",Menlo,monospace;
+    font-size:13px;padding:10px;line-height:1.6;resize:vertical;
+  }
+  .ideal-status{font-size:12px;color:var(--muted);margin-bottom:8px;line-height:1.5;}
+  .ideal-status.active{color:#5A8F4A;}
+  .ideal-btns{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;}
+  .small-btn{
+    font-size:12px;padding:6px 12px;border-radius:8px;border:1px solid var(--line);
+    background:var(--paper);color:var(--ink);cursor:pointer;font-weight:500;
+  }
+  .small-btn.danger{color:#B03A2E;border-color:#E8CACA;}
 </style>
 </head>
 <body>
@@ -90,6 +116,19 @@
     <div class="hint">「1ハゼ」「煎り止め（2ハゼ）」を含む行は自動でフラグになります。時間は「8:10」「8分10秒」「8.5」どれでも可。</div>
   </div>
   <button class="secondary" id="go">グラフ画像を作る</button>
+
+  <details class="ideal-section" id="idealSection">
+    <summary>理想カーブ設定</summary>
+    <div class="ideal-body">
+      <div id="idealStatus" class="ideal-status"></div>
+      <textarea id="idealData" placeholder="理想カーブのデータを貼り付け&#10;（温度推移のフォーマットはメインと同じ）" rows="4"></textarea>
+      <div class="ideal-btns">
+        <button class="small-btn" id="idealSave">この内容で保存</button>
+        <button class="small-btn" id="idealUseCurrent">↑のデータを理想に設定</button>
+        <button class="small-btn danger" id="idealClear">削除</button>
+      </div>
+    </div>
+  </details>
   <div id="err"></div>
   <div id="result">
     <img id="png" alt="焙煎カーブ">
@@ -101,6 +140,70 @@
 <script>
 let lastCanvas = null;
 let lastFname = 'roast';
+
+// --- 理想カーブ管理 ---
+const IDEAL_KEY = 'roast_ideal_curve';
+
+function loadIdeal(){
+  try {
+    const raw = localStorage.getItem(IDEAL_KEY);
+    if(!raw) return null;
+    const parsed = parseAll(raw);
+    return parsed.pts.length >= 2 ? parsed.pts : null;
+  } catch(e){ return null; }
+}
+function saveIdeal(text){
+  localStorage.setItem(IDEAL_KEY, text);
+  updateIdealStatus();
+}
+function clearIdeal(){
+  localStorage.removeItem(IDEAL_KEY);
+  updateIdealStatus();
+}
+function updateIdealStatus(){
+  const el = document.getElementById('idealStatus');
+  const pts = loadIdeal();
+  if(pts){
+    el.textContent = '✓ 理想カーブ保存済み（'+pts.length+'点）';
+    el.className = 'ideal-status active';
+  } else {
+    el.textContent = '理想カーブ未設定';
+    el.className = 'ideal-status';
+  }
+}
+// 初期化
+document.addEventListener('DOMContentLoaded', function(){
+  updateIdealStatus();
+  // 保存済みデータをtextareaに表示
+  try {
+    const raw = localStorage.getItem(IDEAL_KEY);
+    if(raw) document.getElementById('idealData').value = raw;
+  } catch(e){}
+
+  document.getElementById('idealSave').onclick = function(){
+    const text = document.getElementById('idealData').value.trim();
+    if(!text){ alert('データを入力してください'); return; }
+    const parsed = parseAll(text);
+    if(parsed.pts.length < 2){ alert('温度データが2点以上必要です'); return; }
+    saveIdeal(text);
+    alert('理想カーブを保存しました（'+parsed.pts.length+'点）');
+  };
+  document.getElementById('idealUseCurrent').onclick = function(){
+    const text = document.getElementById('data').value.trim();
+    if(!text){ alert('先にメインのデータ欄にデータを入力してください'); return; }
+    const parsed = parseAll(text);
+    if(parsed.pts.length < 2){ alert('温度データが2点以上必要です'); return; }
+    saveIdeal(text);
+    document.getElementById('idealData').value = text;
+    alert('現在のデータを理想カーブとして保存しました（'+parsed.pts.length+'点）');
+  };
+  document.getElementById('idealClear').onclick = function(){
+    if(!confirm('理想カーブを削除しますか？')) return;
+    clearIdeal();
+    document.getElementById('idealData').value = '';
+    alert('削除しました');
+  };
+});
 
 function parseTime(tok){
   if(tok==null) return null;
@@ -118,6 +221,10 @@ function parseTime(tok){
 
 function normalize(line){
   return line
+    .replace(/[（(]\s*RoR[^)）]*[)）]/g,'')   // （RoR xx℃/分）を除去
+    .replace(/^[\s*\-•·]+/,'')                 // 行頭の箇条書き記号を除去
+    .replace(/^\s*分/,'0分')                    // 行頭の「分」→「0分」（0が省略されたケース）
+    .replace(/分\s*[：:]\s*(?=\d)/g,' ')        // 「2分：91」→「2 91」（温度との区切り。分ごと消す）
     .replace(/：/g,':').replace(/，/g,',').replace(/．/g,'.')
     .replace(/(\d)\s*分\s*(\d+)\s*秒?/g,'$1:$2')
     .replace(/分/g,'').replace(/秒/g,'')
@@ -362,6 +469,45 @@ function draw(){
 
   ctx.strokeStyle=C.line;
   ctx.strokeRect(padL, padT, plotW, plotH);
+
+  // 理想カーブ（薄い背景線）
+  const idealPts = loadIdeal();
+  if(idealPts && idealPts.length >= 2){
+    // 理想の温度カーブ
+    ctx.strokeStyle='rgba(184,92,37,0.18)';
+    ctx.lineWidth=2.5;
+    ctx.setLineDash([8,6]);
+    ctx.beginPath();
+    idealPts.forEach((p,i)=>{ i===0?ctx.moveTo(X(p.t),Y(p.temp)):ctx.lineTo(X(p.t),Y(p.temp)); });
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // 理想のRoR
+    const idealRorRaw = [];
+    for(let i=1;i<idealPts.length;i++){
+      const dt = idealPts[i].t - idealPts[i-1].t;
+      if(dt>0) idealRorRaw.push({t:(idealPts[i].t+idealPts[i-1].t)/2, v:(idealPts[i].temp-idealPts[i-1].temp)/dt});
+    }
+    const idealRor = idealRorRaw.length >= 4
+      ? idealRorRaw.map((r,i)=>{
+          const p = idealRorRaw[i-1]||r, n = idealRorRaw[i+1]||r;
+          return {t:r.t, v: p.v*0.25 + r.v*0.5 + n.v*0.25};
+        })
+      : idealRorRaw;
+    if(idealRor.length){
+      ctx.strokeStyle='rgba(78,110,129,0.18)';
+      ctx.lineWidth=2;
+      ctx.setLineDash([4,5]);
+      ctx.beginPath();
+      idealRor.forEach((r,i)=>{ i===0?ctx.moveTo(X(r.t),YR(r.v)):ctx.lineTo(X(r.t),YR(r.v)); });
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    // 凡例に「理想」を追加
+    ctx.font='600 11px '+sans;
+    ctx.textAlign='right';
+    ctx.fillStyle='rgba(184,92,37,0.35)';
+    ctx.fillText('--- 理想', W-padR-130, 62);
+  }
 
   // RoR（破線・先に描く）
   if(ror.length){
